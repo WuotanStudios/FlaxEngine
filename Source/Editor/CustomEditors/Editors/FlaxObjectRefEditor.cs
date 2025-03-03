@@ -7,7 +7,10 @@ using FlaxEditor.CustomEditors.Elements;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.SceneGraph;
+using FlaxEditor.SceneGraph.GUI;
 using FlaxEditor.Scripting;
+using FlaxEditor.Windows;
+using FlaxEditor.Windows.Assets;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
@@ -23,6 +26,7 @@ namespace FlaxEditor.CustomEditors.Editors
     public class FlaxObjectRefPickerControl : Control
     {
         private ScriptType _type;
+        private ActorTreeNode _linkedTreeNode;
         private Object _value;
         private string _valueName;
         private bool _supportsPickDropDown;
@@ -37,6 +41,11 @@ namespace FlaxEditor.CustomEditors.Editors
         private DragAssets _dragAssets;
         private DragScripts _dragScripts;
         private DragHandlers _dragHandlers;
+
+        /// <summary>
+        /// The presenter using this control.
+        /// </summary>
+        public IPresenterOwner PresenterContext;
 
         /// <summary>
         /// Gets or sets the allowed objects type (given type and all sub classes). Must be <see cref="Object"/> type of any subclass.
@@ -128,6 +137,11 @@ namespace FlaxEditor.CustomEditors.Editors
         public Func<Object, ScriptType, bool> CheckValid;
 
         /// <summary>
+        /// Utility flag used to indicate that there are different values assigned to this reference editor and user should be informed about it.
+        /// </summary>
+        public bool DifferentValues;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="FlaxObjectRefPickerControl"/> class.
         /// </summary>
         public FlaxObjectRefPickerControl()
@@ -152,7 +166,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     Value = actor;
                     RootWindow.Focus();
                     Focus();
-                });
+                }, PresenterContext);
             }
             else
             {
@@ -161,7 +175,7 @@ namespace FlaxEditor.CustomEditors.Editors
                     Value = script;
                     RootWindow.Focus();
                     Focus();
-                });
+                }, PresenterContext);
             }
         }
 
@@ -195,7 +209,14 @@ namespace FlaxEditor.CustomEditors.Editors
             Render2D.DrawRectangle(frameRect, isEnabled && (IsMouseOver || IsNavFocused) ? style.BorderHighlighted : style.BorderNormal);
 
             // Check if has item selected
-            if (isSelected)
+            if (DifferentValues)
+            {
+                // Draw info
+                Render2D.PushClip(nameRect);
+                Render2D.DrawText(style.FontMedium, Type != null ? $"Multiple Values ({Utilities.Utils.GetPropertyNameUI(Type.ToString())})" : "-", nameRect, isEnabled ? style.ForegroundGrey : style.ForegroundGrey.AlphaMultiplied(0.75f), TextAlignment.Near, TextAlignment.Center);
+                Render2D.PopClip();
+            }
+            else if (isSelected)
             {
                 // Draw name
                 Render2D.PushClip(nameRect);
@@ -300,7 +321,52 @@ namespace FlaxEditor.CustomEditors.Editors
 
             // Picker dropdown menu
             if (_supportsPickDropDown && (isSelected ? button2Rect : button1Rect).Contains(ref location))
+            {
                 ShowDropDownMenu();
+                return true;
+            }
+
+            if (button == MouseButton.Left)
+            {
+                _isMouseDown = false;
+
+                // Highlight actor or script reference
+                if (!_hasValidDragOver && !IsDragOver)
+                {
+                    Actor actor = _value as Actor;
+                    if (actor == null && _value is Script script)
+                        actor = script.Actor;
+                    if (actor != null)
+                    {
+                        if (_linkedTreeNode != null && _linkedTreeNode.Actor == actor)
+                        {
+                            _linkedTreeNode.ExpandAllParents();
+                            _linkedTreeNode.StartHighlight();
+                        }
+                        else
+                        {
+                            if (PresenterContext is PropertiesWindow)
+                                _linkedTreeNode = Editor.Instance.Scene.GetActorNode(actor).TreeNode;
+                            else if (PresenterContext is PrefabWindow prefabWindow)
+                                _linkedTreeNode = prefabWindow.Graph.Root.Find(actor).TreeNode;
+                            if (_linkedTreeNode != null)
+                            {
+                                _linkedTreeNode.ExpandAllParents();
+                                if (PresenterContext is PropertiesWindow)
+                                    Editor.Instance.Windows.SceneWin.SceneTreePanel.ScrollViewTo(_linkedTreeNode, true);
+                                else if (PresenterContext is PrefabWindow prefabWindow)
+                                    (prefabWindow.Tree.Parent as Panel).ScrollViewTo(_linkedTreeNode, true);
+                                _linkedTreeNode.StartHighlight();
+                            }
+                        }
+                        return true;
+                    }
+                }
+
+                // Reset valid drag over if still true at this point
+                if (_hasValidDragOver)
+                    _hasValidDragOver = false;
+            }
 
             return base.OnMouseUp(location, button);
         }
@@ -326,11 +392,28 @@ namespace FlaxEditor.CustomEditors.Editors
             // Check if has object selected
             if (_value != null)
             {
+                if (_linkedTreeNode != null)
+                {
+                    _linkedTreeNode.StopHighlight();
+                    _linkedTreeNode = null;
+                }
+
                 // Select object
                 if (_value is Actor actor)
-                    Editor.Instance.SceneEditing.Select(actor);
+                {
+                    if (PresenterContext is PropertiesWindow)
+                        Editor.Instance.SceneEditing.Select(actor);
+                    else if (PresenterContext is PrefabWindow prefabWindow)
+                        prefabWindow.Select(prefabWindow.Graph.Root.Find(actor));
+                }
                 else if (_value is Script script && script.Actor)
-                    Editor.Instance.SceneEditing.Select(script.Actor);
+                {
+                    var a = script.Actor;
+                    if (PresenterContext is PropertiesWindow)
+                        Editor.Instance.SceneEditing.Select(a);
+                    else if (PresenterContext is PrefabWindow prefabWindow)
+                        prefabWindow.Select(prefabWindow.Graph.Root.Find(a));
+                }
                 else if (_value is Asset asset)
                     Editor.Instance.Windows.ContentWin.Select(asset);
             }
@@ -371,13 +454,13 @@ namespace FlaxEditor.CustomEditors.Editors
 
             // Ensure to have valid drag helpers (uses lazy init)
             if (_dragActors == null)
-                _dragActors = new DragActors(x => IsValid(x.Actor));
+                _dragActors = new DragActors(ValidateDragActor);
             if (_dragActorsWithScript == null)
                 _dragActorsWithScript = new DragActors(ValidateDragActorWithScript);
             if (_dragAssets == null)
                 _dragAssets = new DragAssets(ValidateDragAsset);
             if (_dragScripts == null)
-                _dragScripts = new DragScripts(IsValid);
+                _dragScripts = new DragScripts(ValidateDragScript);
             if (_dragHandlers == null)
             {
                 _dragHandlers = new DragHandlers
@@ -402,6 +485,43 @@ namespace FlaxEditor.CustomEditors.Editors
             return DragEffect;
         }
 
+        private bool ValidateDragActor(ActorNode a)
+        {
+            if (!IsValid(a.Actor))
+                return false;
+            
+            if (PresenterContext is PrefabWindow prefabWindow)
+            {
+                if (prefabWindow.Tree == a.TreeNode.ParentTree)
+                    return true;
+            }
+            else if (PresenterContext is PropertiesWindow || PresenterContext == null)
+            {
+                if (a.ParentScene != null)
+                    return true;
+            }
+            return false;
+        }
+
+        private bool ValidateDragScript(Script script)
+        {
+            if (!IsValid(script))
+                return false;
+            
+            if (PresenterContext is PrefabWindow prefabWindow)
+            {
+                var actorNode = prefabWindow.Graph.Root.Find(script.Actor);
+                if (actorNode != null)
+                    return true;
+            }
+            else if (PresenterContext is PropertiesWindow || PresenterContext == null)
+            {
+                if (script.Actor.HasScene)
+                    return true;
+            }
+            return false;
+        }
+
         private bool ValidateDragAsset(AssetItem assetItem)
         {
             // Check if can accept assets
@@ -420,7 +540,18 @@ namespace FlaxEditor.CustomEditors.Editors
 
         private bool ValidateDragActorWithScript(ActorNode node)
         {
-            return node.Actor.Scripts.Any(IsValid);
+            bool isCorrectContext = false;
+            if (PresenterContext is PrefabWindow prefabWindow)
+            {
+                if (prefabWindow.Tree == node.TreeNode.ParentTree)
+                    isCorrectContext =  true;
+            }
+            else if (PresenterContext is PropertiesWindow || PresenterContext == null)
+            {
+                if (node.ParentScene != null)
+                    isCorrectContext =  true;
+            }
+            return node.Actor.Scripts.Any(IsValid) && isCorrectContext;
         }
 
         /// <inheritdoc />
@@ -469,6 +600,7 @@ namespace FlaxEditor.CustomEditors.Editors
             _value = null;
             _type = ScriptType.Null;
             _valueName = null;
+            _linkedTreeNode = null;
 
             base.OnDestroy();
         }
@@ -491,6 +623,7 @@ namespace FlaxEditor.CustomEditors.Editors
             if (!HasDifferentTypes)
             {
                 _element = layout.Custom<FlaxObjectRefPickerControl>();
+                _element.CustomControl.PresenterContext = Presenter.Owner;
                 _element.CustomControl.Type = Values.Type.Type != typeof(object) || Values[0] == null ? Values.Type : TypeUtils.GetObjectType(Values[0]);
                 _element.CustomControl.ValueChanged += () => SetValue(_element.CustomControl.Value);
             }
@@ -501,7 +634,9 @@ namespace FlaxEditor.CustomEditors.Editors
         {
             base.Refresh();
 
-            if (!HasDifferentValues)
+            var differentValues = HasDifferentValues;
+            _element.CustomControl.DifferentValues = differentValues;
+            if (!differentValues)
             {
                 _element.CustomControl.Value = Values[0] as Object;
             }

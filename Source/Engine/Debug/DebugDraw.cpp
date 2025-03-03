@@ -94,6 +94,13 @@ struct DebugLine
     float TimeLeft;
 };
 
+struct DebugGeometryBuffer
+{
+    GPUBuffer* Buffer;
+    float TimeLeft;
+    Matrix Transform;
+};
+
 struct DebugTriangle
 {
     Float3 V0;
@@ -122,12 +129,9 @@ struct DebugText3D
     float TimeLeft;
 };
 
-PACK_STRUCT(struct Vertex {
-    Float3 Position;
-    Color32 Color;
-    });
+typedef DebugDraw::Vertex Vertex;
 
-GPU_CB_STRUCT(Data {
+GPU_CB_STRUCT(ShaderData {
     Matrix ViewProjection;
     Float2 Padding;
     float ClipPosZBias;
@@ -231,6 +235,7 @@ void TeleportList(const Float3& delta, Array<DebugText3D>& list)
 
 struct DebugDrawData
 {
+    Array<DebugGeometryBuffer> GeometryBuffers;
     Array<DebugLine> DefaultLines;
     Array<Vertex> OneFrameLines;
     Array<DebugTriangle> DefaultTriangles;
@@ -244,7 +249,7 @@ struct DebugDrawData
 
     inline int32 Count() const
     {
-        return LinesCount() + TrianglesCount() + TextCount();
+        return LinesCount() + TrianglesCount() + TextCount() + GeometryBuffers.Count();
     }
 
     inline int32 LinesCount() const
@@ -280,6 +285,7 @@ struct DebugDrawData
 
     inline void Update(float deltaTime)
     {
+        UpdateList(deltaTime, GeometryBuffers);
         UpdateList(deltaTime, DefaultLines);
         UpdateList(deltaTime, DefaultTriangles);
         UpdateList(deltaTime, DefaultWireTriangles);
@@ -735,6 +741,11 @@ void DebugDraw::SetContext(void* context)
 
 #endif
 
+Vector3 DebugDraw::GetViewPos()
+{
+    return Context->LastViewPos;
+}
+
 void DebugDraw::Draw(RenderContext& renderContext, GPUTextureView* target, GPUTextureView* depthBuffer, bool enableDepthTest)
 {
     PROFILE_GPU_CPU("Debug Draw");
@@ -784,7 +795,7 @@ void DebugDraw::Draw(RenderContext& renderContext, GPUTextureView* target, GPUTe
 
     // Update constant buffer
     const auto cb = DebugDrawShader->GetShader()->GetCB(0);
-    Data data;
+    ShaderData data;
     Matrix vp;
     Matrix::Multiply(view.View, view.Projection, vp);
     Matrix::Transpose(vp, data.ViewProjection);
@@ -830,6 +841,22 @@ void DebugDraw::Draw(RenderContext& renderContext, GPUTextureView* target, GPUTe
             context->Draw(depthTestTriangles.StartVertex, depthTestTriangles.VertexCount);
         }
 
+        // Geometries
+        for (auto& geometry : Context->DebugDrawDepthTest.GeometryBuffers)
+        {
+            auto tmp = data;
+            Matrix mvp;
+            Matrix::Multiply(geometry.Transform, vp, mvp);
+            Matrix::Transpose(mvp, tmp.ViewProjection);
+            context->UpdateCB(cb, &tmp);
+            auto state = data.EnableDepthTest ? &DebugDrawPsLinesDepthTest : &DebugDrawPsLinesDefault;
+            context->SetState(state->Get(enableDepthWrite, true));
+            context->BindVB(ToSpan(&geometry.Buffer, 1));
+            context->Draw(0, geometry.Buffer->GetElementsCount());
+        }
+        if (Context->DebugDrawDepthTest.GeometryBuffers.HasItems())
+            context->UpdateCB(cb, &data);
+
         if (data.EnableDepthTest)
             context->UnBindSR(0);
     }
@@ -861,6 +888,19 @@ void DebugDraw::Draw(RenderContext& renderContext, GPUTextureView* target, GPUTe
             context->SetState(DebugDrawPsTrianglesDefault.Get(false, false));
             context->BindVB(ToSpan(&vb, 1));
             context->Draw(defaultTriangles.StartVertex, defaultTriangles.VertexCount);
+        }
+
+        // Geometries
+        for (auto& geometry : Context->DebugDrawDefault.GeometryBuffers)
+        {
+            auto tmp = data;
+            Matrix mvp;
+            Matrix::Multiply(geometry.Transform, vp, mvp);
+            Matrix::Transpose(mvp, tmp.ViewProjection);
+            context->UpdateCB(cb, &tmp);
+            context->SetState(DebugDrawPsLinesDefault.Get(false, false));
+            context->BindVB(ToSpan(&geometry.Buffer, 1));
+            context->Draw(0, geometry.Buffer->GetElementsCount());
         }
     }
 
@@ -1086,6 +1126,24 @@ void DebugDraw::DrawLines(const Span<Float3>& lines, const Matrix& transform, co
             debugDrawData.OneFrameLines.Add(l);
         }
     }
+}
+
+void DebugDraw::DrawLines(GPUBuffer* lines, const Matrix& transform, float duration, bool depthTest)
+{
+    if (lines == nullptr || lines->GetSize() == 0)
+        return;
+    if (lines->GetSize() % (sizeof(Vertex) * 2) != 0)
+    {
+        DebugLog::ThrowException("Cannot draw debug lines with uneven amount of items in array");
+        return;
+    }
+
+    // Draw lines
+    auto& debugDrawData = depthTest ? Context->DebugDrawDepthTest : Context->DebugDrawDefault;
+    auto& geometry = debugDrawData.GeometryBuffers.AddOne();
+    geometry.Buffer = lines;
+    geometry.TimeLeft = duration;
+    geometry.Transform = transform * Matrix::Translation(-Context->Origin);
 }
 
 void DebugDraw::DrawLines(const Array<Float3>& lines, const Matrix& transform, const Color& color, float duration, bool depthTest)
@@ -1673,6 +1731,11 @@ void DebugDraw::DrawWireTriangles(const Array<Double3>& vertices, const Array<in
 
 void DebugDraw::DrawTube(const Vector3& position, const Quaternion& orientation, float radius, float length, const Color& color, float duration, bool depthTest)
 {
+    DrawCapsule(position, orientation, radius, length, color, duration, depthTest);
+}
+
+void DebugDraw::DrawCapsule(const Vector3& position, const Quaternion& orientation, float radius, float length, const Color& color, float duration, bool depthTest)
+{
     // Check if has no length (just sphere)
     if (length < ZeroTolerance)
     {
@@ -1691,6 +1754,11 @@ void DebugDraw::DrawTube(const Vector3& position, const Quaternion& orientation,
 }
 
 void DebugDraw::DrawWireTube(const Vector3& position, const Quaternion& orientation, float radius, float length, const Color& color, float duration, bool depthTest)
+{
+    DrawWireCapsule(position, orientation, radius, length, color, duration, depthTest);
+}
+
+void DebugDraw::DrawWireCapsule(const Vector3& position, const Quaternion& orientation, float radius, float length, const Color& color, float duration, bool depthTest)
 {
     // Check if has no length (just sphere)
     if (length < ZeroTolerance)
@@ -2011,16 +2079,23 @@ void DebugDraw::DrawWireArc(const Vector3& position, const Quaternion& orientati
         prevPos = Float3(Math::Cos(TWO_PI - angleStep) * radius, Math::Sin(TWO_PI - angleStep) * radius, 0);
         Float3::Transform(prevPos, world, prevPos);
     }
+    const Color32 color32(color);
+    auto& debugDrawData = depthTest ? Context->DebugDrawDepthTest : Context->DebugDrawDefault;
+#define ADD_LINE(a, b) if (duration > 0) debugDrawData.DefaultLines.Add({ a, b, color32, duration }); else { debugDrawData.OneFrameLines.Add({ a, color32 }); debugDrawData.OneFrameLines.Add({ b, color32 }); }
     for (int32 i = 0; i <= resolution; i++)
     {
         Float3 pos(Math::Cos(currentAngle) * radius, Math::Sin(currentAngle) * radius, 0);
         Float3::Transform(pos, world, pos);
-        DrawLine(prevPos, pos, color, duration, depthTest);
+        ADD_LINE(prevPos, pos);
         currentAngle += angleStep;
         prevPos = pos;
     }
     if (angle < TWO_PI)
-        DrawLine(prevPos, world.GetTranslation(), color, duration, depthTest);
+    {
+        Float3 pos(world.GetTranslation());
+        ADD_LINE(prevPos, pos);
+    }
+#undef ADD_LINE
 }
 
 void DebugDraw::DrawWireArrow(const Vector3& position, const Quaternion& orientation, float scale, float capScale, const Color& color, float duration, bool depthTest)
@@ -2143,6 +2218,11 @@ void DebugDraw::DrawText(const StringView& text, const Transform& transform, con
     t.Size = size;
     t.Color = color;
     t.TimeLeft = duration;
+}
+
+void DebugDraw::Clear(void* context)
+{
+    UpdateContext(context, MAX_float);
 }
 
 #endif

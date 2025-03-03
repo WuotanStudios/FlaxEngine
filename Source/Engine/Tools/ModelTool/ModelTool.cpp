@@ -667,6 +667,7 @@ void ModelTool::Options::Serialize(SerializeStream& stream, const void* otherObj
     SERIALIZE(FlipNormals);
     SERIALIZE(CalculateTangents);
     SERIALIZE(SmoothingTangentsAngle);
+    SERIALIZE(ReverseWindingOrder);
     SERIALIZE(OptimizeMeshes);
     SERIALIZE(MergeMeshes);
     SERIALIZE(ImportLODs);
@@ -717,6 +718,7 @@ void ModelTool::Options::Deserialize(DeserializeStream& stream, ISerializeModifi
     DESERIALIZE(FlipNormals);
     DESERIALIZE(CalculateTangents);
     DESERIALIZE(SmoothingTangentsAngle);
+    DESERIALIZE(ReverseWindingOrder);
     DESERIALIZE(OptimizeMeshes);
     DESERIALIZE(MergeMeshes);
     DESERIALIZE(ImportLODs);
@@ -1080,11 +1082,7 @@ void TrySetupMaterialParameter(MaterialInstance* instance, Span<const Char*> par
 String GetAdditionalImportPath(const String& autoImportOutput, Array<String>& importedFileNames, const String& name)
 {
     String filename = name;
-    for (int32 j = filename.Length() - 1; j >= 0; j--)
-    {
-        if (EditorUtilities::IsInvalidPathChar(filename[j]))
-            filename[j] = ' ';
-    }
+    EditorUtilities::ValidatePathChars(filename);
     if (importedFileNames.Contains(filename))
     {
         int32 counter = 1;

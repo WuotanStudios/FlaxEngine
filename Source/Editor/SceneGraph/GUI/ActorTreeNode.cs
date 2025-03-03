@@ -8,6 +8,7 @@ using FlaxEditor.Content;
 using FlaxEditor.GUI;
 using FlaxEditor.GUI.Drag;
 using FlaxEditor.GUI.Tree;
+using FlaxEditor.Options;
 using FlaxEditor.Scripting;
 using FlaxEditor.Utilities;
 using FlaxEditor.Windows;
@@ -15,7 +16,6 @@ using FlaxEditor.Windows.Assets;
 using FlaxEngine;
 using FlaxEngine.GUI;
 using FlaxEngine.Utilities;
-using Object = FlaxEngine.Object;
 
 namespace FlaxEditor.SceneGraph.GUI
 {
@@ -393,7 +393,7 @@ namespace FlaxEditor.SceneGraph.GUI
         /// <summary>
         /// Starts the actor renaming action.
         /// </summary>
-        public void StartRenaming(EditorWindow window, Panel treePanel = null)
+        public void StartRenaming(EditorWindow window = null, Panel treePanel = null)
         {
             // Block renaming during scripts reload
             if (Editor.Instance.ProgressReporting.CompileScripts.IsActive)
@@ -459,6 +459,30 @@ namespace FlaxEditor.SceneGraph.GUI
                 for (int i = 0; i < _highlights.Count; i++)
                     Render2D.FillRectangle(_highlights[i], color);
             }
+        }
+
+        /// <inheritdoc />
+        protected override bool OnMouseDoubleClickHeader(ref Float2 location, MouseButton button)
+        {
+            if (button == MouseButton.Left)
+            {
+                var sceneContext = this.GetSceneContext();
+                switch (Editor.Instance.Options.Options.Input.DoubleClickSceneNode)
+                {
+                case SceneNodeDoubleClick.RenameActor:
+                    sceneContext.RenameSelection();
+                    return true;
+                case SceneNodeDoubleClick.FocusActor:
+                    sceneContext.FocusSelection();
+                    return true;
+                case SceneNodeDoubleClick.OpenPrefab:
+                    Editor.Instance.Prefabs.OpenPrefab(ActorNode);
+                    return true;
+                case SceneNodeDoubleClick.Expand:
+                default: break;
+                }
+            }
+            return base.OnMouseDoubleClickHeader(ref location, button);
         }
 
         /// <inheritdoc />
@@ -596,11 +620,17 @@ namespace FlaxEditor.SceneGraph.GUI
             {
                 bool worldPositionsStays = Root.GetKey(KeyboardKeys.Control) == false;
                 var objects = new SceneObject[_dragActors.Objects.Count];
+                var treeNodes = new TreeNode[_dragActors.Objects.Count];
                 for (int i = 0; i < objects.Length; i++)
+                {
                     objects[i] = _dragActors.Objects[i].Actor;
+                    treeNodes[i] = _dragActors.Objects[i].TreeNode;
+                }
                 var action = new ParentActorsAction(objects, newParent, newOrder, worldPositionsStays);
                 ActorNode.Root.Undo?.AddAction(action);
                 action.Do();
+                ParentTree.Focus();
+                ParentTree.Select(treeNodes.ToList());
                 result = DragDropEffect.Move;
             }
             // Drag scripts

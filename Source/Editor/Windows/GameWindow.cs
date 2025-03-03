@@ -23,6 +23,8 @@ namespace FlaxEditor.Windows
         private readonly GameRoot _guiRoot;
         private bool _showGUI = true;
         private bool _showDebugDraw = false;
+        private bool _audioMuted = false;
+        private float _audioVolume = 1;
         private bool _isMaximized = false, _isUnlockingMouse = false;
         private bool _isFloating = false, _isBorderless = false;
         private bool _cursorVisible = true;
@@ -38,6 +40,28 @@ namespace FlaxEditor.Windows
         private float _windowAspectRatio = 1;
         private bool _useAspect = false;
         private bool _freeAspect = true;
+
+        private List<PlayModeFocusOptions> _focusOptions = new List<PlayModeFocusOptions>()
+        {
+            new PlayModeFocusOptions
+            {
+                Name = "None",
+                Tooltip = "Don't change focus.",
+                FocusOption = InterfaceOptions.PlayModeFocus.None,
+            },
+            new PlayModeFocusOptions
+            {
+                Name = "Game Window",
+                Tooltip = "Focus the Game Window.",
+                FocusOption = InterfaceOptions.PlayModeFocus.GameWindow,
+            },
+            new PlayModeFocusOptions
+            {
+                Name = "Game Window Then Restore",
+                Tooltip = "Focus the Game Window. On play mode end restore focus to the previous window.",
+                FocusOption = InterfaceOptions.PlayModeFocus.GameWindowThenRestore,
+            },
+        };
 
         /// <summary>
         /// Gets the viewport.
@@ -67,6 +91,35 @@ namespace FlaxEditor.Windows
         {
             get => _showDebugDraw;
             set => _showDebugDraw = value;
+        }
+
+
+        /// <summary>
+        /// Gets or set a value indicating whether Audio is muted.
+        /// </summary>
+        public bool AudioMuted
+        {
+            get => _audioMuted;
+            set
+            {
+                Audio.MasterVolume = value ? 0 : AudioVolume;
+                _audioMuted = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets a value that set the audio volume.
+        /// </summary>
+        public float AudioVolume
+        {
+            get => _audioVolume;
+            set
+            {
+                if (!AudioMuted)
+                    Audio.MasterVolume = value;
+
+                _audioVolume = value;
+            }
         }
 
         /// <summary>
@@ -162,9 +215,9 @@ namespace FlaxEditor.Windows
         public bool CenterMouseOnFocus { get; set; }
 
         /// <summary>
-        /// Gets or sets a value indicating whether auto-focus game window on play mode start.
+        /// Gets or sets a value indicating what panel should be focused when play mode start.
         /// </summary>
-        public bool FocusOnPlay { get; set; }
+        public InterfaceOptions.PlayModeFocus FocusOnPlayOption { get; set; }
 
         private enum ViewportScaleType
         {
@@ -191,6 +244,29 @@ namespace FlaxEditor.Windows
 
             /// <summary>
             /// If the scaling is active.
+            /// </summary>
+            public bool Active;
+        }
+
+        private class PlayModeFocusOptions
+        {
+            /// <summary>
+            /// The name.
+            /// </summary>
+            public string Name;
+
+            /// <summary>
+            /// The tooltip.
+            /// </summary>
+            public string Tooltip;
+
+            /// <summary>
+            /// The type of focus.
+            /// </summary>
+            public InterfaceOptions.PlayModeFocus FocusOption;
+
+            /// <summary>
+            /// If the option is active.
             /// </summary>
             public bool Active;
         }
@@ -430,7 +506,7 @@ namespace FlaxEditor.Windows
         private void OnOptionsChanged(EditorOptions options)
         {
             CenterMouseOnFocus = options.Interface.CenterMouseOnGameWinFocus;
-            FocusOnPlay = options.Interface.FocusGameWinOnPlay;
+            FocusOnPlayOption = options.Interface.FocusOnPlayMode;
         }
 
         private void PlayingStateOnSceneDuplicating()
@@ -495,10 +571,15 @@ namespace FlaxEditor.Windows
 
             // Focus on play
             {
-                var focus = menu.AddButton("Start Focused");
-                focus.CloseMenuOnClick = false;
-                var checkbox = new CheckBox(140, 2, FocusOnPlay) { Parent = focus };
-                checkbox.StateChanged += state => FocusOnPlay = state.Checked;
+                var pfMenu = menu.AddChildMenu("Focus On Play Override").ContextMenu;
+
+                GenerateFocusOptionsContextMenu(pfMenu);
+
+                pfMenu.AddSeparator();
+
+                var button = pfMenu.AddButton("Remove override");
+                button.TooltipText = "Reset the override to the value set in the editor options.";
+                button.Clicked += () => FocusOnPlayOption = Editor.Instance.Options.Options.Interface.FocusOnPlayMode;
             }
 
             menu.AddSeparator();
@@ -553,14 +634,14 @@ namespace FlaxEditor.Windows
                     });
                     _defaultViewportScaling.Add(new ViewportScaleOptions
                     {
-                        Label = "1920x1080 Resolution",
+                        Label = "1920x1080 Resolution (Full HD)",
                         ScaleType = ViewportScaleType.Resolution,
                         Size = new Int2(1920, 1080),
                         Active = false,
                     });
                     _defaultViewportScaling.Add(new ViewportScaleOptions
                     {
-                        Label = "2560x1440 Resolution",
+                        Label = "2560x1440 Resolution (2K)",
                         ScaleType = ViewportScaleType.Resolution,
                         Size = new Int2(2560, 1440),
                         Active = false,
@@ -596,8 +677,60 @@ namespace FlaxEditor.Windows
                 checkbox.StateChanged += x => ShowDebugDraw = x.Checked;
             }
 
+            menu.AddSeparator();
+
+            // Mute Audio
+            {
+                var button = menu.AddButton("Mute Audio");
+                button.CloseMenuOnClick = false;
+                var checkbox = new CheckBox(140, 2, AudioMuted) { Parent = button };
+                checkbox.StateChanged += x => AudioMuted = x.Checked;
+            }
+
+            // Audio Volume
+            {
+                var button = menu.AddButton("Audio Volume");
+                button.CloseMenuOnClick = false;
+                var slider = new FloatValueBox(AudioVolume, 140, 2, 50, 0, 1) { Parent = button };
+                slider.ValueChanged += () => AudioVolume = slider.Value;
+            }
+
             menu.MinimumWidth = 200;
             menu.AddSeparator();
+        }
+
+        private void GenerateFocusOptionsContextMenu(ContextMenu pfMenu)
+        {
+            foreach (PlayModeFocusOptions f in _focusOptions)
+            {
+                f.Active = f.FocusOption == FocusOnPlayOption;
+
+                var button = pfMenu.AddButton(f.Name);
+                button.CloseMenuOnClick = false;
+                button.Tag = f;
+                button.TooltipText = f.Tooltip;
+                button.Icon = f.Active ? Style.Current.CheckBoxTick : SpriteHandle.Invalid;
+                button.Clicked += () =>
+                {
+                    foreach (var child in pfMenu.Items)
+                    {
+                        if (child is ContextMenuButton cmb && cmb.Tag is PlayModeFocusOptions p)
+                        {
+                            if (cmb == button)
+                            {
+                                p.Active = true;
+                                button.Icon = Style.Current.CheckBoxTick;
+                                FocusOnPlayOption = p.FocusOption;
+                            }
+                            else if (p.Active)
+                            {
+                                cmb.Icon = SpriteHandle.Invalid;
+                                p.Active = false;
+                            }
+                        }
+                    }
+                };
+            }
         }
 
         private void CreateViewportSizingContextMenu(ContextMenu vsMenu)

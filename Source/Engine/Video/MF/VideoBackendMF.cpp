@@ -335,6 +335,8 @@ namespace MF
                 }
 
             PROCESS_SAMPLE_END:
+                if (buffer2D)
+                    buffer2D->Release();
                 buffer->Release();
             }
             if (sample)
@@ -397,6 +399,7 @@ namespace MF
                 // Loop
                 playerMF.Time.Ticks %= player.Duration.Ticks;
                 playerMF.Seek = 1;
+                player.PlayAudio();
             }
             else
             {

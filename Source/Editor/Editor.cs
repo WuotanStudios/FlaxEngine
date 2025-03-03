@@ -49,9 +49,9 @@ namespace FlaxEditor
         }
 
         private readonly List<EditorModule> _modules = new List<EditorModule>(16);
-        private bool _isAfterInit, _areModulesInited, _areModulesAfterInitEnd, _isHeadlessMode;
+        private bool _isAfterInit, _areModulesInited, _areModulesAfterInitEnd, _isHeadlessMode, _autoExit;
         private string _projectToOpen;
-        private float _lastAutoSaveTimer;
+        private float _lastAutoSaveTimer, _autoExitTimeout = 0.1f;
         private Button _saveNowButton;
         private Button _cancelSaveButton;
         private bool _autoSaveNow;
@@ -258,10 +258,11 @@ namespace FlaxEditor
             Instance = this;
         }
 
-        internal void Init(bool isHeadless, bool skipCompile, bool newProject, Guid startupScene)
+        internal void Init(StartupFlags flags, Guid startupScene)
         {
             Log("Setting up C# Editor...");
-            _isHeadlessMode = isHeadless;
+            _isHeadlessMode = flags.HasFlag(StartupFlags.Headless);
+            _autoExit = flags.HasFlag(StartupFlags.Exit);
             _startupSceneCmdLine = startupScene;
 
             Profiler.BeginEvent("Projects");
@@ -297,11 +298,11 @@ namespace FlaxEditor
             StateMachine = new EditorStateMachine(this);
             Undo = new EditorUndo(this);
 
-            if (newProject)
+            if (flags.HasFlag(StartupFlags.NewProject))
                 InitProject();
             EnsureState<LoadingState>();
             Log("Editor init");
-            if (isHeadless)
+            if (_isHeadlessMode)
                 Log("Running in headless mode");
 
             // Note: we don't sort modules before Init (optimized)
@@ -357,7 +358,7 @@ namespace FlaxEditor
             InitializationStart?.Invoke();
 
             // Start Editor initialization ending phrase (will wait for scripts compilation result)
-            StateMachine.LoadingState.StartInitEnding(skipCompile);
+            StateMachine.LoadingState.StartInitEnding(flags.HasFlag(StartupFlags.SkipCompile));
         }
 
         internal void RegisterModule(EditorModule module)
@@ -486,6 +487,15 @@ namespace FlaxEditor
             {
                 StateMachine.Update();
                 UpdateAutoSave();
+                if (_autoExit && StateMachine.CurrentState == StateMachine.EditingSceneState)
+                {
+                    _autoExitTimeout -= Time.UnscaledGameTime;
+                    if (_autoExitTimeout < 0.0f)
+                    {
+                        Log("Auto exit");
+                        Engine.RequestExit(0);
+                    }
+                }
 
                 if (!StateMachine.IsPlayMode)
                 {
@@ -1540,9 +1550,9 @@ namespace FlaxEditor
                 // Handle case when Game window is not selected in tab view
                 var dockedTo = gameWin.ParentDockPanel;
                 if (dockedTo != null && dockedTo.SelectedTab != gameWin && dockedTo.SelectedTab != null)
-                    result = dockedTo.SelectedTab.Size * root.DpiScale;
+                    result = dockedTo.SelectedTab.Size;
                 else
-                    result = gameWin.Viewport.Size * root.DpiScale;
+                    result = gameWin.Viewport.Size;
 
                 result = Float2.Round(result);
             }
@@ -1675,9 +1685,6 @@ namespace FlaxEditor
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_CanSetToRoot", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static partial bool Internal_CanSetToRoot(IntPtr prefab, IntPtr newRoot);
-
-        [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetPrefabNestedObject", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
-        internal static partial void Internal_GetPrefabNestedObject(IntPtr prefabId, IntPtr prefabObjectId, IntPtr outPrefabId, IntPtr outPrefabObjectId);
 
         [LibraryImport("FlaxEngine", EntryPoint = "EditorInternal_GetAnimationTime", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial float Internal_GetAnimationTime(IntPtr animatedModel);

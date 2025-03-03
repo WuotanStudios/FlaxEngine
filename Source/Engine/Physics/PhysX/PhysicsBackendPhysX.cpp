@@ -536,15 +536,6 @@ protected:
 			hitInfo = hit.shape ? static_cast<PhysicsColliderActor*>(hit.shape->userData) : nullptr; \
 		}
 
-#define SCENE_QUERY_COLLECT_OVERLAP_COLLIDER() results.Clear();  \
-		results.Resize(buffer.getNbTouches(), false); \
-		for (int32 i = 0; i < results.Count(); i++) \
-		{ \
-			auto& hitInfo = results[i]; \
-			const auto& hit = buffer.getTouch(i); \
-			hitInfo = hit.shape ? static_cast<Collider*>(hit.shape->userData) : nullptr; \
-		}
-
 namespace
 {
     PxFoundation* Foundation = nullptr;
@@ -2266,51 +2257,6 @@ bool PhysicsBackend::CheckConvex(void* scene, const Vector3& center, const Colli
     return scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter);
 }
 
-bool PhysicsBackend::OverlapBox(void* scene, const Vector3& center, const Vector3& halfExtents, Array<Collider*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
-{
-    SCENE_QUERY_SETUP_OVERLAP();
-    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
-    const PxBoxGeometry geometry(C2P(halfExtents));
-    if (!scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter))
-        return false;
-    SCENE_QUERY_COLLECT_OVERLAP_COLLIDER();
-    return true;
-}
-
-bool PhysicsBackend::OverlapSphere(void* scene, const Vector3& center, const float radius, Array<Collider*>& results, uint32 layerMask, bool hitTriggers)
-{
-    SCENE_QUERY_SETUP_OVERLAP();
-    const PxTransform pose(C2P(center - scenePhysX->Origin));
-    const PxSphereGeometry geometry(radius);
-    if (!scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter))
-        return false;
-    SCENE_QUERY_COLLECT_OVERLAP_COLLIDER();
-    return true;
-}
-
-bool PhysicsBackend::OverlapCapsule(void* scene, const Vector3& center, const float radius, const float height, Array<Collider*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
-{
-    SCENE_QUERY_SETUP_OVERLAP();
-    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
-    const PxCapsuleGeometry geometry(radius, height * 0.5f);
-    if (!scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter))
-        return false;
-    SCENE_QUERY_COLLECT_OVERLAP_COLLIDER();
-    return true;
-}
-
-bool PhysicsBackend::OverlapConvex(void* scene, const Vector3& center, const CollisionData* convexMesh, const Vector3& scale, Array<Collider*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
-{
-    CHECK_RETURN(convexMesh && convexMesh->GetOptions().Type == CollisionDataType::ConvexMesh, false)
-    SCENE_QUERY_SETUP_OVERLAP();
-    const PxTransform pose(C2P(center - scenePhysX->Origin), C2P(rotation));
-    const PxConvexMeshGeometry geometry((PxConvexMesh*)convexMesh->GetConvex(), PxMeshScale(C2P(scale)));
-    if (!scenePhysX->Scene->overlap(geometry, pose, buffer, filterData, &QueryFilter))
-        return false;
-    SCENE_QUERY_COLLECT_OVERLAP_COLLIDER();
-    return true;
-}
-
 bool PhysicsBackend::OverlapBox(void* scene, const Vector3& center, const Vector3& halfExtents, Array<PhysicsColliderActor*>& results, const Quaternion& rotation, uint32 layerMask, bool hitTriggers)
 {
     SCENE_QUERY_SETUP_OVERLAP();
@@ -2801,7 +2747,14 @@ float PhysicsBackend::ComputeShapeSqrDistanceToPoint(void* shape, const Vector3&
 {
     auto shapePhysX = (PxShape*)shape;
     const PxTransform trans(C2P(position), C2P(orientation));
+#if USE_LARGE_WORLDS
+    PxVec3 closestPointPx;
+    float result = PxGeometryQuery::pointDistance(C2P(point), shapePhysX->getGeometry(), trans, &closestPointPx);
+    *closestPoint = P2C(closestPointPx);
+    return result;
+#else
     return PxGeometryQuery::pointDistance(C2P(point), shapePhysX->getGeometry(), trans, (PxVec3*)closestPoint);
+#endif
 }
 
 bool PhysicsBackend::RayCastShape(void* shape, const Vector3& position, const Quaternion& orientation, const Vector3& origin, const Vector3& direction, float& resultHitDistance, float maxDistance)
@@ -3440,39 +3393,13 @@ PxVehicleAntiRollBarData CreatePxPxVehicleAntiRollBarData(const WheeledVehicle::
     return antiRollBar;
 }
 
-bool SortWheelsFrontToBack(WheeledVehicle::Wheel const& a, WheeledVehicle::Wheel const& b)
+bool SortWheelsFrontToBack(WheeledVehicle::Wheel* const& a, WheeledVehicle::Wheel* const& b)
 {
-    return a.Collider && b.Collider && a.Collider->GetLocalPosition().Z > b.Collider->GetLocalPosition().Z;
+    return a->Collider && b->Collider && a->Collider->GetLocalPosition().Z > b->Collider->GetLocalPosition().Z;
 }
 
 void* PhysicsBackend::CreateVehicle(WheeledVehicle* actor)
 {
-    // Physx vehicles needs to have all wheels sorted to apply controls correctly.
-    // Its needs to know what wheels are on front to turn wheel to correctly side
-    // and needs to know wheel side to apply throttle to correctly direction for each track when using tanks.
-    // Anti roll bars needs to have all wheels sorted to get correctly wheel index too.
-    if (actor->_driveType != WheeledVehicle::DriveTypes::NoDrive)
-    {
-        Sorting::QuickSort(actor->_wheels.Get(), actor->_wheels.Count(), SortWheelsFrontToBack);
-
-        // Sort wheels by side
-        if (actor->_driveType == WheeledVehicle::DriveTypes::Tank)
-        {
-            for (int32 i = 0; i < actor->_wheels.Count() - 1; i += 2)
-            {
-                auto a = actor->_wheels[i];
-                auto b = actor->_wheels[i + 1];
-                if (!a.Collider || !b.Collider)
-                    continue;
-                if (a.Collider->GetLocalPosition().X > b.Collider->GetLocalPosition().X)
-                {
-                    actor->_wheels[i] = b;
-                    actor->_wheels[i + 1] = a;
-                }
-            }
-        }
-    }
-
     // Get wheels
     Array<WheeledVehicle::Wheel*, FixedAllocation<PX_MAX_NB_WHEELS>> wheels;
     for (auto& wheel : actor->_wheels)
@@ -3503,6 +3430,33 @@ void* PhysicsBackend::CreateVehicle(WheeledVehicle* actor)
         // No woman, no cry
         return nullptr;
     }
+
+    // Physx vehicles needs to have all wheels sorted to apply controls correctly.
+    // Its needs to know what wheels are on front to turn wheel to correctly side
+    // and needs to know wheel side to apply throttle to correctly direction for each track when using tanks.
+    // Anti roll bars needs to have all wheels sorted to get correctly wheel index too.
+    if (actor->_driveType != WheeledVehicle::DriveTypes::NoDrive)
+    {
+        Sorting::QuickSort(wheels.Get(), wheels.Count(), SortWheelsFrontToBack);
+
+        // Sort wheels by side
+        if (actor->_driveType == WheeledVehicle::DriveTypes::Tank)
+        {
+            for (int32 i = 0; i < wheels.Count() - 1; i += 2)
+            {
+                auto a = wheels[i];
+                auto b = wheels[i + 1];
+                if (!a->Collider || !b->Collider)
+                    continue;
+                if (a->Collider->GetLocalPosition().X > b->Collider->GetLocalPosition().X)
+                {
+                    wheels[i] = b;
+                    wheels[i + 1] = a;
+                }
+            }
+        }
+    }
+    
     actor->_wheelsData.Resize(wheels.Count());
     auto actorPhysX = (PxRigidDynamic*)actor->GetPhysicsActor();
 

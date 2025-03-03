@@ -669,16 +669,31 @@ int Triangulate(OpenFbxImporterData& data, const ofbx::GeometryData& geom, const
         earIndices.Add(indices[i1]);
         earIndices.Add(indices[i2]);
         earIndices.Add(indices[i3]);
+
+		// Remove midpoint of the ear from the loop
         indices.RemoveAtKeepOrder(i2);
     }
 
-    for (int i = 0; i < earIndices.Count(); i++)
-        triangulatedIndices[i] = polygon.from_vertex + (earIndices[i] % polygon.vertex_count);
-    triangulatedIndices[earIndices.Count() + 0] = polygon.from_vertex + (indices[0] % polygon.vertex_count);
-    triangulatedIndices[earIndices.Count() + 1] = polygon.from_vertex + (indices[1] % polygon.vertex_count);
-    triangulatedIndices[earIndices.Count() + 2] = polygon.from_vertex + (indices[2] % polygon.vertex_count);
+    // Last ear
+    earIndices.Add(indices[0]);
+    earIndices.Add(indices[1]);
+    earIndices.Add(indices[2]);
+    
+    // Write any degenerate triangles (eg. if points are duplicated within a list)
+    for (int32 i = 3; i < indices.Count(); i += 3)
+    {
+        earIndices.Add(indices[i + 0]);
+        earIndices.Add(indices[(i + 1) % indices.Count()]);
+        earIndices.Add(indices[(i + 2) % indices.Count()]);
+    }
 
-    return 3 * (polygon.vertex_count - 2);
+    // Copy ears into triangles
+    for (int32 i = 0; i < earIndices.Count(); i++)
+        triangulatedIndices[i] = polygon.from_vertex + (earIndices[i] % polygon.vertex_count);
+
+    // Ensure that we've written enough ears
+    ASSERT(earIndices.Count() == 3 * (polygon.vertex_count - 2));
+    return earIndices.Count();
 }
 
 bool ProcessMesh(ModelData& result, OpenFbxImporterData& data, const ofbx::Mesh* aMesh, MeshData& mesh, String& errorMsg, int partitionIndex)
@@ -715,6 +730,7 @@ bool ProcessMesh(ModelData& result, OpenFbxImporterData& data, const ofbx::Mesh*
                 mesh.Positions.Get()[j] = ToFloat3(positions.get(triangulatedIndices[j]));
             numIndicesTotal += numIndices;
         }
+        ASSERT(numIndicesTotal == vertexCount);
     }
 
     // Indices (dummy index buffer)
@@ -772,6 +788,24 @@ bool ProcessMesh(ModelData& result, OpenFbxImporterData& data, const ofbx::Mesh*
             // Mirror tangents along the Z axis
             for (int32 i = 0; i < vertexCount; i++)
                 mesh.Tangents.Get()[i].Z *= -1.0f;
+        }
+    }
+
+    // Reverse winding order
+    if (data.Options.ReverseWindingOrder)
+    {
+        uint32* meshIndices = mesh.Indices.Get();
+        Float3* meshPositions = mesh.Positions.Get();
+        Float3* meshNormals = mesh.Normals.HasItems() ? mesh.Normals.Get() : nullptr;
+        Float3* meshTangents = mesh.Tangents.HasItems() ? mesh.Tangents.Get() : nullptr;
+
+        for (int i = 0; i < vertexCount; i += 3) {
+            Swap(meshIndices[i + 1], meshIndices[i + 2]);
+            Swap(meshPositions[i + 1], meshPositions[i + 2]);
+            if (meshNormals)
+                Swap(meshNormals[i + 1], meshNormals[i + 2]);
+            if (meshTangents)
+                Swap(meshTangents[i + 1], meshTangents[i + 2]);
         }
     }
 

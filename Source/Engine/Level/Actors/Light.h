@@ -61,7 +61,7 @@ protected:
         position = _transform.Translation - viewOrigin;
         if (ViewDistance > ZeroTolerance)
         {
-            const float dst2 = Vector3::DistanceSquared(viewPosition, position);
+            const float dst2 = (float)Vector3::DistanceSquared(viewPosition, position);
             const float dst = Math::Sqrt(dst2);
             brightness *= Math::Remap(dst, 0.9f * ViewDistance, ViewDistance, 1.0f, 0.0f);
             return dst < ViewDistance;
@@ -173,8 +173,8 @@ public:
     /// <summary>
     /// Frequency of shadow updates at the maximum distance from the view at which shadows are still rendered. This value is multiplied by ShadowsUpdateRate and allows scaling the update rate in-between the shadow range. For example, if light is near view, it will get normal shadow updates but will reduce this rate when far from view. See ShadowsUpdateRate to learn more.
     /// </summary>
-    API_FIELD(Attributes="EditorOrder(105), EditorDisplay(\"Shadow\", \"Update Rate At Distance\"), Limit(0.0f, 1.0f)")
-    float ShadowsUpdateRateAtDistance = 0.5f;
+    API_FIELD(Attributes="EditorOrder(101), EditorDisplay(\"Shadow\", \"Update Rate At Distance\"), Limit(0.0f, 1.0f)")
+    float ShadowsUpdateRateAtDistance = 1.0f;
 
     /// <summary>
     /// Defines the resolution of the shadow map texture used to draw objects projection from light-point-of-view. Higher values increase shadow quality at cost of performance.

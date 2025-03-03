@@ -19,6 +19,7 @@
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Utilities/StringConverter.h"
 #include "Engine/Threading/MainThreadTask.h"
+#include "Engine/Level/SceneObject.h"
 #include "FlaxEngine.Gen.h"
 
 namespace
@@ -39,6 +40,22 @@ namespace
         Log::Logger::Write(type, TEXT("Visual Script stack trace:"));
         Log::Logger::Write(type, stack);
         Log::Logger::Write(type, TEXT(""));
+    }
+
+    bool SerializeValue(const Variant& a, const Variant& b)
+    {
+        bool result = a != b;
+        if (result)
+        {
+            // Special case for scene objects to handle prefab object references
+            auto* aSceneObject = ScriptingObject::Cast<SceneObject>((ScriptingObject*)a);
+            auto* bSceneObject = ScriptingObject::Cast<SceneObject>((ScriptingObject*)b);
+            if (aSceneObject && bSceneObject)
+            {
+                result = Serialization::ShouldSerialize(aSceneObject, bSceneObject);
+            }
+        }
+        return result;
     }
 }
 
@@ -1960,7 +1977,7 @@ void VisualScriptingBinaryModule::SerializeObject(JsonWriter& stream, ScriptingO
                         auto& param = asset->Graph.Parameters[paramIndex];
                         auto& value = params[paramIndex];
                         auto& otherValue = otherParams->Value.Params[paramIndex];
-                        if (value != otherValue)
+                        if (SerializeValue(value, otherValue))
                         {
                             param.Identifier.ToString(idName, Guid::FormatType::N);
                             stream.Key(idName, 32);
@@ -1975,7 +1992,7 @@ void VisualScriptingBinaryModule::SerializeObject(JsonWriter& stream, ScriptingO
                         auto& param = asset->Graph.Parameters[paramIndex];
                         auto& value = params[paramIndex];
                         auto& otherValue = param.Value;
-                        if (value != otherValue)
+                        if (SerializeValue(value, otherValue))
                         {
                             param.Identifier.ToString(idName, Guid::FormatType::N);
                             stream.Key(idName, 32);
@@ -2261,6 +2278,14 @@ void VisualScript::GetMethodSignature(int32 index, String& name, byte& flags, St
         paramTypeNames[i] = param.Type.GetTypeName();
         paramOuts[i] = param.IsOut;
     }
+}
+
+Variant VisualScript::InvokeMethod(int32 index, const Variant& instance, Span<Variant> parameters) const
+{
+    auto& method = _methods[index];
+    Variant result;
+    VisualScriptingModule.InvokeMethod((void*)&method, instance, parameters, result);
+    return result;
 }
 
 Span<byte> VisualScript::GetMetaData(int32 typeID)

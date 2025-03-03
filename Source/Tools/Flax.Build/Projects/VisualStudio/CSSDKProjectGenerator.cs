@@ -26,7 +26,7 @@ namespace Flax.Build.Projects.VisualStudio
         public override TargetType? Type => TargetType.DotNetCore;
 
         /// <inheritdoc />
-        public override void GenerateProject(Project project, string solutionPath)
+        public override void GenerateProject(Project project, string solutionPath, bool isMainProject)
         {
             var dotnetSdk = DotNetSdk.Instance;
             var csProjectFileContent = new StringBuilder();
@@ -109,8 +109,7 @@ namespace Flax.Build.Projects.VisualStudio
 
             //csProjectFileContent.AppendLine("    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>"); // TODO: use it to reduce burden of framework libs
 
-            // Custom .targets file for overriding MSBuild build tasks, only invoke Flax.Build once per Flax project
-            bool isMainProject = Globals.Project.IsCSharpOnlyProject && Globals.Project.ProjectFolderPath == project.WorkspaceRootPath && project.Name != "BuildScripts" && (Globals.Project.Name != "Flax" || project.Name != "FlaxEngine");
+            // Custom .targets file for overriding MSBuild build tasks, only invoke Flax.Build once per Flax project           
             var flaxBuildTargetsFilename = isMainProject ? "Flax.Build.CSharp.targets" : "Flax.Build.CSharp.SkipBuild.targets";
             var cacheProjectsPath = Utilities.MakePathRelativeTo(Path.Combine(Globals.Root, "Cache", "Projects"), projectDirectory);
             var flaxBuildTargetsPath = !string.IsNullOrEmpty(cacheProjectsPath) ? Path.Combine(cacheProjectsPath, flaxBuildTargetsFilename) : flaxBuildTargetsFilename;
@@ -284,6 +283,13 @@ namespace Flax.Build.Projects.VisualStudio
             csProjectFileContent.AppendLine("    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>");
             if (configuration.TargetBuildOptions.ScriptingAPI.IgnoreMissingDocumentationWarnings)
                 csProjectFileContent.AppendLine("    <NoWarn>1591</NoWarn>");
+            if (configuration.TargetBuildOptions.ScriptingAPI.IgnoreSpecificWarnings.Any())
+            {
+                foreach (var warningString in configuration.TargetBuildOptions.ScriptingAPI.IgnoreSpecificWarnings)
+                {
+                    csProjectFileContent.AppendLine($"    <NoWarn>{warningString}</NoWarn>");
+                }
+            }
             csProjectFileContent.AppendLine(string.Format("    <DocumentationFile>{0}\\{1}.CSharp.xml</DocumentationFile>", outputPath, project.BaseName));
             csProjectFileContent.AppendLine("    <UseVSHostingProcess>true</UseVSHostingProcess>");
 
